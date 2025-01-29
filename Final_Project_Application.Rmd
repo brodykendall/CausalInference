@@ -1,0 +1,384 @@
+---
+title: "Final Project Application"
+author: "Brody Kendall"
+date: "3/9/2021"
+output: html_document
+---
+
+
+```{r, include=FALSE}
+library(dplyr)
+library(igraph)
+library(lmtest)
+library(clubSandwich)
+library(cobalt)
+library(sandwich)
+library(tidyr)
+```
+
+```{r}
+load("ICPSR_37070-V2/ICPSR_37070/DS0001/37070-0001-Data.rda")
+data=da37070.0001
+```
+
+```{r labeltovalue}
+DN_label_to_value = function(x) {
+   if(x=="(0) Never") {0} 
+   else if(x=="(1) 1-2 times/month") {1}
+   else if(x=="(2) About 1 time/week") {2} 
+   else if(x=="(3) 2-3 times/week") {3}
+   else {4}
+}
+```
+
+```{r school1}
+school_1 = filter(data, SCHID == 1)
+
+school_1.v = cbind(as.numeric(rownames(school_1)), select(school_1, TREAT))
+
+school_1.e = data.frame(col1 = rep(as.numeric(rownames(school_1)), 10), col2 = as.numeric(c(school_1$ST1, school_1$ST2, school_1$ST3, school_1$ST4, school_1$ST5, school_1$ST6, school_1$ST7, school_1$ST8, school_1$ST9, school_1$ST10)))
+
+school_1.e = school_1.e[complete.cases(school_1.e),]
+school_1.e = filter(school_1.e, col1 <= nrow(school_1), col2 <= nrow(school_1))
+school_1.g = graph_from_data_frame(school_1.e, directed = FALSE, vertices = school_1.v)
+
+school_1.g = simplify(school_1.g)
+
+nv_1 <- vcount(school_1.g)
+z_1 <- numeric(nv_1)
+z_1[which(school_1$TREAT == "(1) Treatment")] <- 1
+V(school_1.g)$color <- rep("white",nv_1)
+V(school_1.g)[z_1==1]$color <- "red3"
+
+
+A = as_adjacency_matrix(school_1.g)
+I.ex.nbrs <- as.numeric(z_1%*%A > 0)
+# Both direct and indirect:
+V(school_1.g)[z_1*I.ex.nbrs==1]$color <- "red"
+# Only indirect:
+V(school_1.g)[(1-z_1)*I.ex.nbrs==1]$color <- "yellow"
+# Isolated direct:
+V(school_1.g)[z_1*(1-I.ex.nbrs)==1]$color <- "blue"
+# No exposure:
+V(school_1.g)[(1-z_1)*(1-I.ex.nbrs)==1]
+
+plot(school_1.g, vertex.size = 8, vertex.label=NA)
+
+school_1$both = z_1*I.ex.nbrs
+school_1$only_indirect = (1-z_1)*I.ex.nbrs
+school_1$only_direct = z_1*(1-I.ex.nbrs)
+school_1$neither = (1-z_1)*(1-I.ex.nbrs)
+
+school_1$indirect = I.ex.nbrs
+school_1$direct = z_1
+
+school_1 = school_1 %>% mutate(DESUM = school_1 %>% select(starts_with("DE"), -DENSITY) %>% rowSums())
+
+school_1_DN1 = school_1[complete.cases(school_1$DN1) & complete.cases(school_1$DN1W2),]
+
+school_1_DN1$DN1Val <- as.numeric(lapply(school_1_DN1$DN1, DN_label_to_value))
+school_1_DN1$DN1W2Val <- as.numeric(lapply(school_1_DN1$DN1W2, DN_label_to_value))
+
+school_1_DN1$DN1DIFF = school_1_DN1$DN1W2Val - school_1_DN1$DN1Val
+
+school_1_DN6 = school_1[complete.cases(school_1$DN6) & complete.cases(school_1$DN6W2),]
+
+school_1_DN6$DN6Val <- as.numeric(lapply(school_1_DN6$DN6, DN_label_to_value))
+school_1_DN6$DN6W2Val <- as.numeric(lapply(school_1_DN6$DN6W2, DN_label_to_value))
+
+school_1_DN6$DN6DIFF = school_1_DN6$DN6W2Val - school_1_DN6$DN6Val
+
+
+sum = data.frame(matrix(nrow=0, ncol=6))
+colnames(sum) = c("both", "both_p", "only_indirect", "indirect_p", "only_direct", "direct_p")
+de2 = data.frame(matrix(nrow=0, ncol=6))
+colnames(de2) = c("both", "both_p", "only_indirect", "indirect_p", "only_direct", "direct_p")
+de12 = data.frame(matrix(nrow=0, ncol=6))
+colnames(de12) = c("both", "both_p", "only_indirect", "indirect_p", "only_direct", "direct_p")
+dn1 = data.frame(matrix(nrow=0, ncol=6))
+colnames(dn1) = c("both", "both_p", "only_indirect", "indirect_p", "only_direct", "direct_p")
+dn6 = data.frame(matrix(nrow=0, ncol=6))
+colnames(dn6) = c("both", "both_p", "only_indirect", "indirect_p", "only_direct", "direct_p")
+
+mod_sum_1 <- lm(DESUM~both+only_indirect+only_direct, data = school_1)
+(coef_sum_1 = coeftest(mod_sum_1, vcov = vcovHC, type = "HC2"))
+(confint(mod_sum_1, vcov=vcovHC, type = "HC2"))
+sum["school_1",] = c(coef_sum_1["both",c(1,4)], 
+                     coef_sum_1["only_indirect",c(1,4)],
+                     coef_sum_1["only_direct",c(1,4)])
+
+mod_de2_1 <- lm(DE2~both+only_indirect+only_direct, data = school_1)
+(coef_de2_1 = coeftest(mod_de2_1, vcov = vcovHC, type = "HC2"))
+(conf_de2_1 = confint(mod_de2_1, vcov=vcovHC, type = "HC2"))
+de2["school_1",] = c(coef_de2_1["both",c(1,4)], 
+                     coef_de2_1["only_indirect",c(1,4)],
+                     coef_de2_1["only_direct",c(1,4)])
+
+mod_de12_1 <- lm(DE12~both+only_indirect+only_direct, data = school_1)
+(coef_de12_1 = coeftest(mod_de12_1, vcov = vcovHC, type = "HC2"))
+(conf_de12_1 = confint(mod_de12_1, vcov=vcovHC, type = "HC2"))
+de12["school_1",] = c(coef_de12_1["both",c(1,4)], 
+                     coef_de12_1["only_indirect",c(1,4)],
+                     coef_de12_1["only_direct",c(1,4)])
+
+mod_dn1_1 <- lm(DN1DIFF~both+only_indirect+only_direct, data = school_1_DN1)
+(coef_dn1_1 = coeftest(mod_dn1_1, vcov = vcovHC, type = "HC2"))
+(conf_dn1_1 = confint(mod_dn1_1, vcov=vcovHC, type = "HC2"))
+dn1["school_1",] = c(coef_dn1_1["both",c(1,4)], 
+                     coef_dn1_1["only_indirect",c(1,4)],
+                     coef_dn1_1["only_direct",c(1,4)])
+
+mod_dn6_1 <- lm(DN6DIFF~both+only_indirect+only_direct, data = school_1_DN6)
+(coef_dn6_1 = coeftest(mod_dn6_1, vcov = vcovHC, type = "HC2"))
+(conf_dn6_1 = confint(mod_dn6_1, vcov=vcovHC, type = "HC2"))
+dn6["school_1",] = c(coef_dn6_1["both",c(1,4)], 
+                     coef_dn6_1["only_indirect",c(1,4)],
+                     coef_dn6_1["only_direct",c(1,4)])
+```
+
+
+
+
+```{r analyze}
+analyze <- function(m) {
+   a = filter(data, SCHID == m)
+   
+   a.v = cbind(as.numeric(rownames(a)), select(a, TREAT))
+   
+   a.e = data.frame(col1 = rep(as.numeric(rownames(a)), 10), col2 = as.numeric(c(a$ST1, a$ST2, a$ST3, a$ST4, a$ST5, a$ST6, a$ST7, a$ST8, a$ST9, a$ST10)))
+   
+   a.e = a.e[complete.cases(a.e),]
+   a.e = filter(a.e, col1 <= nrow(a), col2 <= nrow(a))
+   a.g = graph_from_data_frame(a.e, directed = FALSE, vertices = a.v)
+   
+   a.g = simplify(a.g)
+   
+   nv_1 <- vcount(a.g)
+   z_1 <- numeric(nv_1)
+   z_1[which(a$TREAT == "(1) Treatment")] <- 1
+   
+   A = as_adjacency_matrix(a.g)
+   I.ex.nbrs <- as.numeric(z_1%*%A > 0)
+   # Both direct and indirect:
+   V(a.g)[z_1*I.ex.nbrs==1]
+   # Only indirect:
+   V(a.g)[(1-z_1)*I.ex.nbrs==1]
+   # Isolated direct:
+   V(a.g)[z_1*(1-I.ex.nbrs)==1]
+   # No exposure:
+   V(a.g)[(1-z_1)*(1-I.ex.nbrs)==1]
+   
+   a$both = z_1*I.ex.nbrs
+   a$only_indirect = (1-z_1)*I.ex.nbrs
+   a$only_direct = z_1*(1-I.ex.nbrs)
+   a$neither = (1-z_1)*(1-I.ex.nbrs)
+   
+   a = a %>% mutate(DESUM = a %>% select(starts_with("DE"), -DENSITY) %>% rowSums())
+   
+   a_DN1 = a[complete.cases(a$DN1) & complete.cases(a$DN1W2),]
+   
+   a_DN1$DN1Val <- as.numeric(lapply(a_DN1$DN1, DN_label_to_value))
+   a_DN1$DN1W2Val <- as.numeric(lapply(a_DN1$DN1W2, DN_label_to_value))
+   
+   a_DN1$DN1DIFF = a_DN1$DN1W2Val - a_DN1$DN1Val
+   
+   a_DN6 = a[complete.cases(a$DN6) & complete.cases(a$DN6W2),]
+   
+   a_DN6$DN6Val <- as.numeric(lapply(a_DN6$DN6, DN_label_to_value))
+   a_DN6$DN6W2Val <- as.numeric(lapply(a_DN6$DN6W2, DN_label_to_value))
+   
+   a_DN6$DN6DIFF = a_DN6$DN6W2Val - a_DN6$DN6Val
+   
+   toReturn = vector(mode = "list", length = 0)
+   
+   mod_sum = lm(DESUM~both+only_indirect+only_direct, data = a)
+   toReturn[[paste("coef_sum_", m, sep="")]] = coeftest(mod_sum, vcov = vcovHC, type = "HC2")
+   toReturn[[paste("conf_sum_", m, sep="")]] = confint(mod_sum, vcov=vcovHC, type = "HC2")
+   sum_return = c(toReturn[[paste("coef_sum_", m, sep="")]]["both",c(1,4)], 
+                  toReturn[[paste("coef_sum_", m, sep="")]]["only_indirect",c(1,4)],
+                  toReturn[[paste("coef_sum_", m, sep="")]]["only_direct",c(1,4)])
+   
+   mod_de2 = lm(DE2~both+only_indirect+only_direct, data = a)
+   toReturn[[paste("coef_de2_", m, sep="")]] = coeftest(mod_de2, vcov = vcovHC, type = "HC2")
+   toReturn[[paste("conf_de2_", m, sep="")]] = confint(mod_de2, vcov=vcovHC, type = "HC2")
+   de2_return = c(toReturn[[paste("coef_de2_", m, sep="")]]["both",c(1,4)], 
+                  toReturn[[paste("coef_de2_", m, sep="")]]["only_indirect",c(1,4)],
+                  toReturn[[paste("coef_de2_", m, sep="")]]["only_direct",c(1,4)])
+   
+   mod_de12 = lm(DE12~both+only_indirect+only_direct, data = a)
+   toReturn[[paste("coef_de12_", m, sep="")]] = coeftest(mod_de12, vcov = vcovHC, type = "HC2")
+   toReturn[[paste("conf_de12_", m, sep="")]] = confint(mod_de12, vcov=vcovHC, type = "HC2")
+   de12_return = c(toReturn[[paste("coef_de12_", m, sep="")]]["both",c(1,4)], 
+                   toReturn[[paste("coef_de12_", m, sep="")]]["only_indirect",c(1,4)],
+                   toReturn[[paste("coef_de12_", m, sep="")]]["only_direct",c(1,4)])
+   
+   mod_dn1 = lm(DN1DIFF~both+only_indirect+only_direct, data = a_DN1)
+   toReturn[[paste("coef_dn1_", m, sep="")]] = coeftest(mod_dn1, vcov = vcovHC, type = "HC2")
+   toReturn[[paste("conf_dn1_", m, sep="")]] = confint(mod_dn1, vcov=vcovHC, type = "HC2")
+   dn1_return = c(toReturn[[paste("coef_dn1_", m, sep="")]]["both",c(1,4)], 
+                  toReturn[[paste("coef_dn1_", m, sep="")]]["only_indirect",c(1,4)],
+                  toReturn[[paste("coef_dn1_", m, sep="")]]["only_direct",c(1,4)])
+   
+   mod_dn6 = lm(DN6DIFF~both+only_indirect+only_direct, data = a_DN6)
+   toReturn[[paste("coef_dn6_", m, sep="")]] = coeftest(mod_dn6, vcov = vcovHC, type = "HC2")
+   toReturn[[paste("conf_dn6_", m, sep="")]] = confint(mod_dn6, vcov=vcovHC, type = "HC2")
+   dn6_return = c(toReturn[[paste("coef_sum_", m, sep="")]]["both",c(1,4)], 
+                  toReturn[[paste("coef_dn6_", m, sep="")]]["only_indirect",c(1,4)],
+                  toReturn[[paste("coef_dn6_", m, sep="")]]["only_direct",c(1,4)])
+   
+   toReturn = c(toReturn, sum_return, de2_return, de12_return, dn1_return, dn6_return)
+   
+   return(toReturn)
+}
+```
+
+```{r otherschools}
+school_3 = analyze(3)
+sum["school_3",] = school_3[11:16]
+de2["school_3",] = school_3[17:22]
+de12["school_3",] = school_3[23:28]
+dn1["school_3",] = school_3[29:34]
+dn6["school_3",] = school_3[35:40]
+school_10 = analyze(10)
+sum["school_10",] = school_10[11:16]
+de2["school_10",] = school_10[17:22]
+de12["school_10",] = school_10[23:28]
+dn1["school_10",] = school_10[29:34]
+dn6["school_10",] = school_10[35:40]
+school_13 = analyze(13)
+sum["school_13",] = school_13[11:16]
+de2["school_13",] = school_13[17:22]
+de12["school_13",] = school_13[23:28]
+dn1["school_13",] = school_13[29:34]
+dn6["school_13",] = school_13[35:40]
+school_19 = analyze(19)
+sum["school_19",] = school_19[11:16]
+de2["school_19",] = school_19[17:22]
+de12["school_19",] = school_19[23:28]
+dn1["school_19",] = school_19[29:34]
+dn6["school_19",] = school_19[35:40]
+school_20 = analyze(20)
+sum["school_20",] = school_20[11:16]
+de2["school_20",] = school_20[17:22]
+de12["school_20",] = school_20[23:28]
+dn1["school_20",] = school_20[29:34]
+dn6["school_20",] = school_20[35:40]
+school_22 = analyze(22)
+sum["school_22",] = school_22[11:16]
+de2["school_22",] = school_22[17:22]
+de12["school_22",] = school_22[23:28]
+dn1["school_22",] = school_22[29:34]
+dn6["school_22",] = school_22[35:40]
+school_24 = analyze(24)
+sum["school_24",] = school_24[11:16]
+de2["school_24",] = school_24[17:22]
+de12["school_24",] = school_24[23:28]
+dn1["school_24",] = school_24[29:34]
+dn6["school_24",] = school_24[35:40]
+school_26 = analyze(26)
+sum["school_26",] = school_26[11:16]
+de2["school_26",] = school_26[17:22]
+de12["school_26",] = school_26[23:28]
+dn1["school_26",] = school_26[29:34]
+dn6["school_26",] = school_26[35:40]
+school_27 = analyze(27)
+sum["school_27",] = school_27[11:16]
+de2["school_27",] = school_27[17:22]
+de12["school_27",] = school_27[23:28]
+dn1["school_27",] = school_27[29:34]
+dn6["school_27",] = school_27[35:40]
+school_31 = analyze(31)
+sum["school_31",] = school_31[11:16]
+de2["school_31",] = school_31[17:22]
+de12["school_31",] = school_31[23:28]
+dn1["school_31",] = school_31[29:34]
+dn6["school_31",] = school_31[35:40]
+school_33 = analyze(33)
+sum["school_33",] = school_33[11:16]
+de2["school_33",] = school_33[17:22]
+de12["school_33",] = school_33[23:28]
+dn1["school_33",] = school_33[29:34]
+dn6["school_33",] = school_33[35:40]
+school_34 = analyze(34)
+sum["school_34",] = school_34[11:16]
+de2["school_34",] = school_34[17:22]
+de12["school_34",] = school_34[23:28]
+dn1["school_34",] = school_34[29:34]
+dn6["school_34",] = school_34[35:40]
+school_35 = analyze(35)
+sum["school_35",] = school_35[11:16]
+de2["school_35",] = school_35[17:22]
+de12["school_35",] = school_35[23:28]
+dn1["school_35",] = school_35[29:34]
+dn6["school_35",] = school_35[35:40]
+school_40 = analyze(40)
+sum["school_40",] = school_40[11:16]
+de2["school_40",] = school_40[17:22]
+de12["school_40",] = school_40[23:28]
+dn1["school_40",] = school_40[29:34]
+dn6["school_40",] = school_40[35:40]
+school_42 = analyze(42)
+sum["school_42",] = school_42[11:16]
+de2["school_42",] = school_42[17:22]
+de12["school_42",] = school_42[23:28]
+dn1["school_42",] = school_42[29:34]
+dn6["school_42",] = school_42[35:40]
+school_44 = analyze(44)
+sum["school_44",] = school_44[11:16]
+de2["school_44",] = school_44[17:22]
+de12["school_44",] = school_44[23:28]
+dn1["school_44",] = school_44[29:34]
+dn6["school_44",] = school_44[35:40]
+school_45 = analyze(45)
+sum["school_45",] = school_45[11:16]
+de2["school_45",] = school_45[17:22]
+de12["school_45",] = school_45[23:28]
+dn1["school_45",] = school_45[29:34]
+dn6["school_45",] = school_45[35:40]
+school_48 = analyze(48)
+sum["school_48",] = school_48[11:16]
+de2["school_48",] = school_48[17:22]
+de12["school_48",] = school_48[23:28]
+dn1["school_48",] = school_48[29:34]
+dn6["school_48",] = school_48[35:40]
+school_51 = analyze(51)
+sum["school_51",] = school_51[11:16]
+de2["school_51",] = school_51[17:22]
+de12["school_51",] = school_51[23:28]
+dn1["school_51",] = school_51[29:34]
+dn6["school_51",] = school_51[35:40]
+school_56 = analyze(56)
+sum["school_56",] = school_56[11:16]
+de2["school_56",] = school_56[17:22]
+de12["school_56",] = school_56[23:28]
+dn1["school_56",] = school_56[29:34]
+dn6["school_56",] = school_56[35:40]
+school_58 = analyze(58)
+sum["school_58",] = school_58[11:16]
+de2["school_58",] = school_58[17:22]
+de12["school_58",] = school_58[23:28]
+dn1["school_58",] = school_58[29:34]
+dn6["school_58",] = school_58[35:40]
+school_60 = analyze(60)
+sum["school_60",] = school_60[11:16]
+de2["school_60",] = school_60[17:22]
+de12["school_60",] = school_60[23:28]
+dn1["school_60",] = school_60[29:34]
+dn6["school_60",] = school_60[35:40]
+
+apply(sum, 2, function(x) {
+   round(x, 2)
+})
+apply(de2, 2, function(x) {
+   round(x, 2)
+})
+apply(de12, 2, function(x) {
+   round(x, 2)
+})
+apply(dn1, 2, function(x) {
+   round(x, 2)
+})
+apply(dn6, 2, function(x) {
+   round(x, 2)
+})
+```

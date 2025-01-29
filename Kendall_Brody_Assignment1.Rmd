@@ -1,0 +1,317 @@
+---
+title: 'Assignment 1: Randomized experiments'
+subtitle: 'STAT 328'
+author: "Brody Kendall"
+output: html_document
+---
+
+In this homework, you will analyze part of the data from a study by [Christopher Bryan and colleagues (2016)](http://www.pnas.org/cgi/doi/10.1073/pnas.1604586113) that examined the effects of a brief psychological intervention on the eating behaviors of a group of eighth grade students. Begin by reading the article reporting the results of the study. Be sure that you understand the treatment conditions, outcome measures, and randomization process. 
+
+The original data from the study is available on the Open Science Framework [here](https://osf.io/a627d/). I have processed and cleaned up the data a bit. Specifically, I removed the 34 students in the non-randomized "quasi-experimental" group and removed 1 student who was the only participant labeled as class period 7 and teacher 3. I also dropped many of the variables that are not needed for this assignment and combined indicator variables for class period and teacher into categorical factors. The cleaned dataset is posted on Canvas. The variables are as follows:
+
+- Study design variables
+    - `condition`: randomly assigned treatment condition
+    - `condition_collapsed`: randomly assigned treatment condition, collapsing the two control conditions together.
+    - `class_period`: class period during which the student participated in the intervention
+    - `teacher`: identifier for student's teacher
+    - `classroom`: combination of `teacher` and `class_period`, used to block students when randomizing to treatment condition
+    - `studyyear`: year during which the student participated in the study
+- Outcomes
+    - `autonprosocial`: four-item self-report measure of alignment of healthy eating with adolescent values
+    - `statusappeal`: two-item self-report measure of social status appeal of healthy eating
+    - `junkchoices`: total number of junk food options selected (sum of `junksnack` and `junkdrink`, range: 0-3)
+    - `junksnack`: number of junk snack options selected (0, 1, or 2)
+    - `junkdrink`: indicator for whether student selected a high-sugar drink
+    -  `junkads_angry`: three-item self-report measure of anger in response to food advertisements (only measured in year 2)
+    -  `junkads_consume`: three-item self-report measure of preferences after viewing food advertisements (only measured in year 2)
+- Participant characteristics
+    - `female`: indicator variable equal to one if student is female
+    - `black`: indicator variable equal to one if student is black
+    - `white`: indicator variable equal to one if student is white
+    - `hispanic`: indicator variable equal to one if student is hispanic
+    - `whitenonhispanic`: indicator variable equal to one if student is non-hispanic white
+    - `blacknonhispanic`: indicator variable equal to one if student is non-hispanic black
+    - `age`: student's age in years
+    - `weight`: student's self-reported weight in pounds (only measured in year 2)
+    - `height`: student's self-reported height in inches (only measured in year 2)
+    - `bmi`: body-mass index calculated from self-reported height and weight (only measured in year 2)
+
+Answer the following questions. 
+
+### Part I. Simple randomized experiment
+
+1. Identify the classroom with the largest sample size. Select this classroom, which will be used for the next set of analyses. What is the total number of students in this class and what proportion of students in this classroom are in the treatment group (use `condition_collapsed`)?
+
+```{r, include=FALSE}
+library(dplyr)
+library(cobalt)
+library(clubSandwich)
+library(ri2)
+
+Bryan <- read.csv("Bryan data.csv", stringsAsFactors = FALSE)
+```
+
+```{r}
+class_size <- count(Bryan, classroom)
+
+filter(class_size, n == max(n))
+
+largest_class = filter(Bryan, classroom == "B2")
+
+count(largest_class, condition_collapsed)
+
+10/(24+10)
+```
+The classroom with the largest sample size is B2 with 34 students. 10 out of the 34 are in the treatment group (a proportion of about 0.29).
+
+
+2.  Assess balance on the student characteristics across the intervention and control conditions (use `condition_collapsed`). Specifically, calculate the proportions of female, black, white, and hispanic students by condition and calculate the mean and standard deviation of students age, weight, height, and BMI by condition. (For weight, height, and BMI, use the subset of students in year 2 of the study.) Organize the results in a table or tables. (Hint: use the `cobalt` package to make this easier). Are there any covariates with large differences? If students were randomized to treatment, are these differences unusual?
+
+
+```{r}
+covs1 <- subset(largest_class, select = c(female, black, white, hispanic, age))
+
+bal.tab(condition_collapsed ~ covs1, data = largest_class, 
+        disp = c("means", "sds"), #saves and prints means, sds for both
+        stats = c("mean.diffs"), #stats to include
+        thresholds = c(m=.1, v = 2))
+    
+largest_class_y2 = filter(largest_class, studyyear == 2)
+covs2 <- subset(largest_class_y2, select = c(weight, height, bmi))
+
+bal.tab(condition_collapsed ~ covs2, data = largest_class_y2, 
+        disp = c("means", "sds"), #saves and prints means, sds for both
+        stats = c("mean.diffs"), #stats to include
+        thresholds = c(m=.1, v = 2)
+        )
+```
+
+The only two covariates with differences that are considered balanced for the given thresholds are for the proportion of female students and black students in each treatment group. All the other covariates (white, hispanic, age, weight, height, and bmi) have differences that are large enough (in magnitude) to be flagged as unbalanced. More on whether these are unusual given randomization in question 5.
+
+
+3. We will focus on the outcome `statusappeal`. Estimate the treatment effect and test hypotheses regarding the effect of the intervention using: (a) a model-based method, (b) a design-based method, and (c) a randomization-based method. (Hint: use the `clubSandwich` and `ri2` packages.)
+
+```{r}
+# (a)
+lm_fit <- lm(statusappeal ~ condition_collapsed, data = largest_class)
+summary(lm_fit)
+
+# (b)
+V_CR2 <- vcovCR(lm_fit, cluster = largest_class$id, type = "CR2")
+
+coef_test(lm_fit, vcov =V_CR2, test = "Satterthwaite")
+
+# (c)
+largest_class$trt <- ifelse(largest_class$condition_collapsed=="expose treatment",1,0)
+
+declaration <- declare_ra(N=34, m = 10) # N is the number of units. m is the number of treated.
+
+modri <- conduct_ri(statusappeal ~ trt,
+                    declaration = declaration,
+                    assignment = "trt", #which variable is being tested in the model (has to be 0, 1)
+                    data = largest_class)
+
+summary(modri, p = "two-tailed")
+```
+
+(a) Treatment effect estimate: 0.575. Using this approach, we fail to reject the null hypothesis and cannot conclude that the treatment has an effect with a p-value of 0.159.
+
+(b) Treatment effect estimate: 0.575. Again, we fail to reject the null hypothesis and cannot conclude that the treatment has an effect with a p-value of 0.197.
+
+(c) Treatment effect estimate: 0.575. Again, we fail to reject the null hypothesis and cannot conclude that the treatment has an effect with a p-value of 0.187.
+
+
+
+4. How are the results similar/ different when using model-based, design-based, and randomization-based procedures? (Be sure your answer compares not just the numbers found, but also the assumptions, etc that go into the test). Is there one you find more appropriate here? Why?
+
+The treatment effect estimate is equal for each procedure at 0.575, although all three procedures fail to reject the null hypothesis with p-values in the range of [0.159, 0.197]. Although we are only considering one class (a relatively small sample size) either the design-based or the model-based procedure seem to be more appropriate because the ultimate goal of the study is to make conclusions about the average treatment effect on larger populations, not about whether the treatment effects only the eighth-graders in this specific classroom. Out of these two, I will select the design-based procedure as with a smaller sample size it will be more difficult to make the homoskedasticity assumption required for the regression model.
+
+
+5. Now, for those covariates with balance problems (#2), are these systematic differences or simply due to chance? (To do so, use your preferred model from #4, using the covariates identified in #2 in place of the outcome in the model.) Importantly, note that in practice (including the next set of problems) this balance should be checked *before* the outcomes are observed. (That is, steps #4 and #5 should be reversed.)
+
+```{r}
+lm_fit_wh <- lm(white ~ condition_collapsed, data = largest_class)
+V_CR2_wh <- vcovCR(lm_fit_wh, cluster = largest_class$id, type = "CR2")
+coef_test(lm_fit_wh, vcov =V_CR2_wh, test = "Satterthwaite")
+
+lm_fit_hi <- lm(hispanic ~ condition_collapsed, data = largest_class)
+V_CR2_hi <- vcovCR(lm_fit_hi, cluster = largest_class$id, type = "CR2")
+coef_test(lm_fit_hi, vcov =V_CR2_hi, test = "Satterthwaite")
+
+lm_fit_a <- lm(age ~ condition_collapsed, data = largest_class)
+V_CR2_a <- vcovCR(lm_fit_a, cluster = largest_class$id, type = "CR2")
+coef_test(lm_fit_a, vcov =V_CR2_a, test = "Satterthwaite")
+
+lm_fit_w <- lm(weight ~ condition_collapsed, data = largest_class)
+V_CR2_w <- vcovCR(lm_fit_w, cluster = largest_class$id, type = "CR2")
+coef_test(lm_fit_w, vcov =V_CR2_w, test = "Satterthwaite")
+
+lm_fit_he <- lm(height ~ condition_collapsed, data = largest_class)
+V_CR2_he <- vcovCR(lm_fit_he, cluster = largest_class$id, type = "CR2")
+coef_test(lm_fit_he, vcov =V_CR2_he, test = "Satterthwaite")
+
+lm_fit_b <- lm(bmi ~ condition_collapsed, data = largest_class)
+V_CR2_b <- vcovCR(lm_fit_b, cluster = largest_class$id, type = "CR2")
+coef_test(lm_fit_b, vcov =V_CR2_b, test = "Satterthwaite")
+
+```
+
+Based on these tests with p-values ranging from 0.189 to 0.367, we do not have enough evidence to conclude that the covariates with balance problems are systematic differences.
+
+### Part II. Randomized block design
+
+The above analysis allowed you to explore and understand differences and similarities between the approaches in a simple situation. Very often, however, randomized experiments include more complex designs, such as blocking. In this study, random assignment was implemented within _each_ classroom separately; the resulting design is called a 'random-block design', where the classrooms are 'blocks'. 
+
+6. What is the overall proportion of students assigned to the intervention? 
+
+```{r}
+table(Bryan$condition_collapsed)
+204/(297+204)
+```
+
+The overall proportion of students assigned to the intervention is about 0.407.
+
+7. Calculate the proportion of students assigned to the intervention (the treatment allocation fraction) within each classroom. What classrooms had the smallest and largest treatment allocation fractions? What proportion of students are assigned to treatment in these classrooms?
+
+```{r}
+(Bryan_prop = Bryan %>%
+    group_by(classroom, condition_collapsed) %>%
+    summarise(count = n()) %>%
+    mutate(prop = count / sum(count)) %>%
+    filter(condition_collapsed == "expose treatment"))
+
+Bryan_prop[which(Bryan_prop$prop == min(Bryan_prop$prop)),]
+Bryan_prop[which(Bryan_prop$prop == max(Bryan_prop$prop)),]
+```
+
+The proportion of students assigned to the intervention can be found in the prop column in the table. The classroom with the smallest treatment allocation fraction was D1 with about 0.214. The classroom with the largest treatment allocation fraction was F1 with about 0.667.
+
+
+
+8. As in #2, but now for the whole study, assess balance on the student characteristics across the intervention and control conditions. Specifically, calculate the proportions of female, black, white, and hispanic students by condition and calculate the mean and standard deviation of students age, weight, height, and BMI by condition. (For weight, height, and BMI, use the subset of students in year 2 of the study.) Organize the results in a table or tables. (Hint: use the `cobalt` package.)
+
+```{r}
+covs1 <- subset(Bryan, select = c(female, black, white, hispanic, age))
+
+bal.tab(condition_collapsed ~ covs1, data = Bryan, 
+        disp = c("means", "sds"), #saves and prints means, sds for both
+        stats = c("mean.diffs"), #stats to include
+        thresholds = c(m=.1, v = 2))
+    
+Bryan_y2 = filter(Bryan, studyyear == 2)
+covs2 <- subset(Bryan_y2, select = c(weight, height, bmi))
+
+bal.tab(condition_collapsed ~ covs2, data = Bryan_y2, 
+        disp = c("means", "sds"), #saves and prints means, sds for both
+        stats = c("mean.diffs"), #stats to include
+        thresholds = c(m=.1, v = 2)
+        )
+```
+
+
+9. Before examining the outcome, you should test for systematic differences on baseline covariates (those that look to be large) using the same method as you will use to test for differences on the outcome. As in #3, here you will investigate three different approaches to testing hypotheses: model-based, design-based, and randomization-based inferences. However, now you will need to account for blocking in these analyses. (Note: beware of missing data, which may need to be removed.) This means you will need to conduct several tests (e.g., k covariates x 3 inference approaches). Under which models and for which outcomes, if any, are differences larger than would be expected by chance?
+
+```{r}
+# model-based
+lm_fit_w <- lm(weight ~ condition_collapsed + classroom, data = Bryan_y2)
+summary(lm_fit_w)
+
+lm_fit_h <- lm(height ~ condition_collapsed + classroom, data = Bryan_y2)
+summary(lm_fit_h)
+
+lm_fit_b <- lm(bmi ~ condition_collapsed + classroom, data = Bryan_y2)
+summary(lm_fit_b)
+
+# design-based
+V_CR2_w <- vcovCR(lm_fit_w, cluster = Bryan_y2$id, type = "CR2")
+coef_test(lm_fit_w, vcov =V_CR2_w, test = "Satterthwaite")
+
+V_CR2_h <- vcovCR(lm_fit_h, cluster = Bryan_y2$id, type = "CR2")
+coef_test(lm_fit_h, vcov =V_CR2_h, test = "Satterthwaite")
+
+V_CR2_b <- vcovCR(lm_fit_b, cluster = Bryan_y2$id, type = "CR2")
+coef_test(lm_fit_b, vcov =V_CR2_b, test = "Satterthwaite")
+
+# randomization-based
+Bryan_y2$trt <- ifelse(Bryan_y2$condition_collapsed=="expose treatment",1,0)
+
+Bryan_y2_w = Bryan_y2[!(is.na(Bryan_y2$weight)),]
+block_m_w <- with(Bryan_y2_w, tapply(trt, classroom, sum)) # calculate the number of treatments in each class/block.
+declaration_w <- declare_ra(blocks = Bryan_y2_w$classroom, block_m = block_m_w) 
+modri_w <- conduct_ri(weight ~ trt,
+                    declaration = declaration_w,
+                    assignment = "trt", 
+                    data = Bryan_y2_w) 
+summary(modri_w, p = "two-tailed")
+
+Bryan_y2_h = Bryan_y2[!(is.na(Bryan_y2$height)),]
+block_m_h <- with(Bryan_y2_h, tapply(trt, classroom, sum)) # calculate the number of treatments in each class/block.
+declaration_h <- declare_ra(blocks = Bryan_y2_h$classroom, block_m = block_m_h) 
+modri_h <- conduct_ri(height ~ trt,
+                    declaration = declaration_h,
+                    assignment = "trt", 
+                    data = Bryan_y2_h) 
+summary(modri_h, p = "two-tailed")
+
+Bryan_y2_b = Bryan_y2[!(is.na(Bryan_y2$bmi)),]
+block_m_b <- with(Bryan_y2_b, tapply(trt, classroom, sum)) # calculate the number of treatments in each class/block.
+declaration_b <- declare_ra(blocks = Bryan_y2_b$classroom, block_m = block_m_b) 
+modri_b <- conduct_ri(bmi ~ trt,
+                    declaration = declaration_b,
+                    assignment = "trt", 
+                    data = Bryan_y2_b) 
+summary(modri_b, p = "two-tailed")
+```
+I investigated the three covariates that were flagged as "Not Balanced" from the output for the previous question: weight, height, and bmi within the three different approaches to testing hypotheses. None of the nine p-values were less than 0.05, so we can conclude that there are no differences that are larger than we would expect to occur through chance alone.
+
+
+
+10. Now, repeat #9 but with the `statusappeal` outcome. As in #4, compare the results across the three different approaches and interpret the findings. Which of these analyses do you think is most appropriate? Why? (Note: randomization inference cannot handle missing data, so be careful to remove rows with missing values from the analysis.)
+
+```{r, warning = FALSE}
+# model-based
+lm_fit <- lm(statusappeal ~ condition_collapsed + classroom, data = Bryan)
+summary(lm_fit)
+
+# design-based
+V_CR2 <- vcovCR(lm_fit, cluster = Bryan$id, type = "CR2")
+coef_test(lm_fit, vcov =V_CR2, test = "Satterthwaite")
+
+# randomization-based
+Bryan$trt <- ifelse(Bryan$condition_collapsed=="expose treatment",1,0)
+
+Bryan_r = Bryan[!(is.na(Bryan$statusappeal)),]
+block_m <- with(Bryan_r, tapply(trt, classroom, sum)) # calculate the number of treatments in each class/block.
+declaration <- declare_ra(blocks = Bryan_r$classroom, block_m = block_m) 
+modri <- conduct_ri(statusappeal ~ trt,
+                    declaration = declaration,
+                    assignment = "trt", 
+                    data = Bryan_r) 
+summary(modri, p = "two-tailed")
+```
+For all of these approaches, we find extremely small p-values, so we can comfortably reject the null hypothesis in each case and conclude that the treatment has a non-zero effect on the statusappeal variable within the context of each approach. Following a similar rationale to earlier, the design-based procedure is still the most appropriate in this case. This is because our goal is to make conclusions about larger populations (something we couldn't do with confidence using the randomization-based model). When deciding between the model-based on design-based procedures, we see that the additional assumptions for a model-based approach are not necessary to achieve our goal. So, by selecting design-based, we can make our conclusions more general considering we have fewer assumptions (although it is slightly problematic that we make this selection only after seeing the results).
+
+### Satterthwaite approximation (extra credit 2 points)
+
+Satterthwaite approximation is a generalization of Welch's degrees of freedom for the two-sample t-test. It can be used to obtain  hypothesis tests and confidence intervals that are more accurate than standard methods when sample sizes are small. Suppose that one has a treatment effect estimate $d$ of the parameter $\delta$ and an associated variance estimator $V$. The __*Satterthwaite degrees of freedom*__ for $V$ is defined as
+
+$$\eta = \frac{2\left[\text{E}(V)\right]^2}{\text{Var}(V)}$$
+Using an estimate of these degrees of freedom, a t-test for $H_0: \delta = 0$ is calculated by comparing $t = d / \sqrt{V}$ to a t reference distribution with $\eta$ degrees of freedom. A $(1 - 2\alpha)$ confidence interval for $\delta$ is calculated as $d \pm \sqrt{V}\times t_\eta$, where $t_\eta$ is is the $\alpha$ critical value from a t distribution with $\eta$ degrees of freedom.
+
+11. If $s^2$ is a sample variance calculated from $n$ observations from a normal distribution with variance $\sigma^2$, then $\text{E}(s^2) = \sigma^2$ and $\text{Var}(s^2) = 2\sigma^4 / (n - 1)$. Using these facts, find an expression for the Satterthwaite degrees of freedom for the variance estimator 
+
+    $$V_{weighted} =  \sum_{j=1}^J \left(\frac{N_j}{N}\right)^2 \left(\frac{s_{0j}^2}{n_{0j}} + \frac{s_{1j}^2}{n_{1j}}\right).$$ 
+
+    in terms of the variances of the potential outcomes $\sigma_{0j}^2,\sigma_{1j}^2$ and sample sizes $n_{0j}, n_{1j}$. 
+    
+    
+Assuming independence between blocks and between the treatment and control groups, 
+
+$$\eta_{weighted} = \frac{\left(\sum_{j=1}^J N_j^2\left(\frac{\sigma_{0j}^2}{n_{0j}}+\frac{\sigma_{1j}^2}{n_{1j}}\right)\right)^2} {\sum_{j=1}^J N_j^4\left(\frac{\sigma_{0j}^4}{n_{0j}^2\left(n_{0j}-1\right)}+\frac{\sigma_{1j}^4}{n_{1j}^2\left(n_{1j}-1\right)}\right)}$$
+    is an expression for the Satterthwaite degrees of freedom for the given variance estimator.
+    
+    
+    
+12. The expression you obtain cannot be calculated because it involves unknown sample variances. How could the Satterthwaite degrees of freedom be estimated?  
+
+Substitute the known estimates for sample variance in for the unknown sample variances ($s_{0j}^2$ and $s_{1j}^2$ for $\sigma_{0j}^2$ and $\sigma_{1j}^2$, respectively.

@@ -1,0 +1,215 @@
+---
+title: 'HW 3: Regression analysis'
+author: 'Brody Kendall'
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 2
+---
+
+# Introduction
+
+Rosenbaum (1986) used data from the nationally representative _High School and Beyond_ (HSB) longitudinal study to estimate the effect of dropping out of high school on student's academic knowledge and skills. HSB was unique in that students who dropped out of high school between their sophomore and senior year were tracked over time and asked to complete academic assessments in several subject areas. Using propensity score matching methods, he found that dropout results in average reductions of .07 to .11 standard deviations across subject areas, with larger reductions in mathematics than in reading or vocabulary. 
+
+The [High School Longitudinal Study of 2009](https://nces.ed.gov/surveys/hsls09/index.asp) fielded a nationally representative sample of 9th graders in the United States during 2009, with follow-up three and seven years later (2012 and 2016). Participants were selected using a complex, multi-stage probability sampling design. 
+
+In this assignment, you are asked use part of the data from HSLS09 to estimate the effect of dropping out of high school on students' mathematics knowledge, as a conceptual replication of Rosenbaum (1986). Your main tool for doing so will be regression analysis. Because HSLS09 used a multi-stage sampling design, one would typically use cluster-robust standard errors to account for dependence of observations (in this case, students) nested within clusters (in this case, schools). However, the public-use version of HSLS09 does not include information on the structure of the sampling design. __Therefore, for purposes of the assignment only, you may treat the data as coming from a simple random sample of the population of high school students__. (If you want to analyze these data for real, you should apply for a restricted-use license.)
+
+# Data
+
+I have provided a cleaned-up version of the data, with imputed values for any missing data (in practice, we would need to use multiple imputation, but we'll save that for another day!). All of the covariates were measured on base-year surveys in 2009, prior to student drop-out. The included variables are as follows:
+
+- __Categorical covariates__
+    - `sex`: student sex (self-reported). 2 categories.
+    - `race`: student race/ethnicity (self-reported) 8 categories.
+    - `language`: student's first language (English, non-English only, Multi-lingual).
+    - `repeated_grade`: indicator for whether student has repeated grade 9 (parent-reported).
+    - `IEP`: indicator for whether student has an individualized-education plan.
+    - `locale`: school locale (urbanicity). 4 categories.
+    - `region`: Major census region. 4 categories.
+- __Continuous covariates__
+    - `SES`: composite measure of family socio-economic status
+    - `math_identity`: scale measure of student's identity as a "math person"
+    - `math_utility`: scale measure of student's perception that math is useful
+    - `math_efficacy`: scale measure of student's math self-efficacy
+    - `math_interest`: scale measure of student's interest in their current mathematics course.
+    - `engagement`: scale measure of student's engagement in school
+    - `belonging`: scale measure of student's sense of school belonging
+    - `expectations`: student's expectations for further schooling
+    - `climate`: principal-reported scale measure of school climate.
+    - `math_score_T1`: student's math knowledge as of 2009
+- __Treatment__
+    - `drop_status`: indicator for whether student dropped out as of 2012.
+- __Outcomes__
+    - `math_score_T2`: measure of math knowledge as of 2012
+    - `working_T3`: indicator for whether the student is working as of 2013.
+
+# Questions
+
+For each of the following questions, write your response in complete sentences unless otherwise specified. (Do NOT provide raw computer output without also writing your interpretation of that output.) __*Report both point estimates and 95% confidence intervals whenever the question asks you to estimate an effect*__. Use heteroskedasticity-robust standard errors (HC2-type) throughout.
+
+## Question 1 
+
+Evaluate the extent to which the two groups differ at baseline (i.e., lack of balance) in these covariates. For the continuous covariates, calculate  mean differences (or standardized mean differences, if you prefer) between students who dropped out and students who remained in school. For the binary and categorical covariates, calculate the difference in proportions between drop-outs and stayers. 
+  a. Report the results in a table. 
+  b. Note which of the covariates are very imbalanced. 
+  c. Create a plot illustrating the degree of imbalance for one of the very imbalanced variables.
+
+```{r}
+load("HSLS09.Rdata")
+library(cobalt)
+library(sandwich)
+library(lmtest)
+library(dplyr)
+
+covs1 <- subset(HSLS09_complete, select = c(-drop_status, -math_score_T2, -working_T3))
+
+bal.tab(drop_status ~ covs1, data = HSLS09_complete, 
+        disp = c("means", "sds"),
+        stats = c("mean.diffs"),
+        thresholds = c(m=.1))
+
+bal.plot(drop_status ~ covs1, data = HSLS09_complete, 
+         var.name = "math_score_T1")
+
+```
+
+a. Both the standardized mean differences (for continuous covariates) and the differences in proportions (for discrete covariates) between students who dropped out and students who remained in school can be found in the column in the table above titled "Diff.Un".
+
+b. The two covariates that I would describe as very imbalanced are SES and math_score_T1, with standardized mean differences of -0.9074 and -0.9541, respectively. Other covariates that are imbalanced (but not to the same degree) are engagement, belonging, repeated_grade, math_identity, math_efficacy, expectations, and climate, with magnitudes of standardized mean differences/differences in proportions in the range of [0.4155, 0.6253].
+
+c. The plot shows the distributional balance between the treatment and the students' math knowledge as of 2009 (math_score_T1).
+
+
+## Question 2 
+
+Calculate the difference in 2012 (T2) mathematics scores between students who dropped out and students who remained in school (i.e., a naive estimate of the effect of dropping out).
+
+```{r}
+mod <- lm(math_score_T2~drop_status, data = HSLS09_complete)
+coeftest(mod, vcov = vcovHC, type = "HC2")["drop_status",]
+confint(mod, vcov=vcovHC, type = "HC2")["drop_status",]
+```
+
+A naive estimate of the effect of dropping out is a change of -1.299 (95% CI of [-1.391, -1.207]) on the 2012 mathematics scores.
+
+
+## Question 3 
+
+Fit a linear regression that includes an indicator for dropping out as well as main effects for each of the seven categorical and ten continuous covariates. Report the estimated difference (and 95% CI) in mathematics scores between drop-outs and stayers, controlling for the covariates. By how much does this estimate differ from the naive estimate (Q2)? 
+
+```{r}
+mod <- lm(math_score_T2 ~  . - working_T3, data = HSLS09_complete)
+coeftest(mod, vcov = vcovHC, type = "HC2")["drop_status",]
+confint(mod, vcov=vcovHC, type = "HC2")["drop_status",]
+```
+
+Using this regression model, we estimate the difference in mathematics scores between drop-outs and stayers as -0.356 (95% CI of [-0.417, -0.295]). This still estimates a negative difference in scores, but the difference is smaller by almost a full point (0.943).
+
+
+## Question 4 
+
+Fit a linear regression that controls for all seventeen covariates as well as the interactions between drop-out and the covariates (or equivalently, estimate separate main-effects regressions for drop-outs and stayers). Based on this model, estimate the average effects of dropping out for a) all students and b) students who dropped out.
+
+```{r}
+# ATE:
+center_colmeans_ATE <- function(x) {    
+  xcenter = colMeans(x)    
+  x - rep(xcenter, rep.int(nrow(x), ncol(x)))
+}
+mod <- lm(math_score_T2 ~  . - working_T3 - drop_status , data = HSLS09_complete)
+X <- model.matrix(terms(mod), data = model.frame(mod))
+X_c_ATE <- center_colmeans_ATE(X)
+mod_c <- lm(math_score_T2 ~ drop_status * X_c_ATE, data = HSLS09_complete)
+coeftest(mod_c, vcov = vcovHC, type = "HC2")["drop_status",]
+confint(mod_c, vcov=vcovHC, type = "HC2")["drop_status",]
+
+# ATT:
+center_colmeans_ATT <- function(x) {    
+  y = cbind(x, HSLS09_complete$drop_status)    
+  y = subset(y, y[,ncol(y)] == 1)    
+  ycenter = colMeans(y[,-c(ncol(y))])    
+  x - rep(ycenter, rep.int(nrow(x), ncol(x)))
+}
+X_c_ATT <- center_colmeans_ATT(X)
+mod_c <- lm(math_score_T2 ~ drop_status * X_c_ATT, data = HSLS09_complete)
+coeftest(mod_c, vcov = vcovHC, type = "HC2")["drop_status",]
+confint(mod_c, vcov=vcovHC, type = "HC2")["drop_status",]
+```
+
+a. By including interaction effects, we estimate the average treatment effect (ATE) of dropping out on mathematics scores as -0.746 (95% CI of [-0.863, -0.630]).
+
+b. We estimate the average treatment effect on the treated (ATT) of dropping out on mathematics scores as -0.342 (95% CI of [-0.403, -0.281]).
+
+
+## Question 5 
+
+Imagine that you are going to present these findings to a group of education policy-makers. Explain the substantive interpretation of the estimates from Q4 for this audience.
+
+a. We estimate that for all students at this high school, the average (isolated) effect of dropping out of high school is a decrease in about 0.746 points on the provided mathematics test. This means that the simple act of dropping out, accounting for all other variables which we have measured, causes a notable and significant decrease in math knowledge for high school students.
+
+b. We estimate that among students who attended this high school who did drop out, the average (isolated) effect of of dropping out of high school is a decrease in about 0.342 points on the provided mathematics test. This means that even among the group of students who are the most likely to drop out in the first place, dropping out still causes a notable and significant decrease in math knowledge (albeit a smaller decrease than for the entire school population).
+
+
+## Question 6 
+
+Fit three or more further regressions for these data, using model specifications other than those from Q3 or Q4. For at least one of the regressions, include interaction terms among the covariates. For each model that you fit:
+    a. report the exact specification that you used,
+    b. explain how you chose it, and 
+    c. use it to estimate the average effect of dropping out for students who did drop out (i.e., the ATT). 
+
+```{r}
+# Model 1
+mod <- lm(math_score_T2 ~ SES + math_score_T1, data = HSLS09_complete)
+X <- model.matrix(terms(mod), data = model.frame(mod))
+X_c_ATT <- center_colmeans_ATT(X)
+mod_c <- lm(math_score_T2 ~ drop_status * X_c_ATT, data = HSLS09_complete)
+coeftest(mod_c, vcov = vcovHC, type = "HC2")["drop_status",]
+confint(mod_c, vcov=vcovHC, type = "HC2")["drop_status",]
+
+# Model 2
+mod <- lm(math_score_T2 ~ repeated_grade + SES + math_identity + math_efficacy +
+            math_interest + engagement + belonging + expectations + climate +
+            math_score_T1, data = HSLS09_complete)
+X <- model.matrix(terms(mod), data = model.frame(mod))
+X_c_ATT <- center_colmeans_ATT(X)
+mod_c <- lm(math_score_T2 ~ drop_status * X_c_ATT, data = HSLS09_complete)
+coeftest(mod_c, vcov = vcovHC, type = "HC2")["drop_status",]
+confint(mod_c, vcov=vcovHC, type = "HC2")["drop_status",]
+
+# Model 3
+mod <- lm(math_score_T2 ~ (repeated_grade + SES + math_identity + math_efficacy +
+            math_interest + engagement + belonging + expectations + climate +
+            math_score_T1)^2, data = HSLS09_complete)
+X <- model.matrix(terms(mod), data = model.frame(mod))
+X_c_ATT <- center_colmeans_ATT(X)
+mod_c <- lm(math_score_T2 ~ drop_status * X_c_ATT, data = HSLS09_complete)
+coeftest(mod_c, vcov = vcovHC, type = "HC2")["drop_status",]
+confint(mod_c, vcov=vcovHC, type = "HC2")["drop_status",]
+
+```
+
+Model 1:
+
+a. This linear regression model controls for two covariates as well as their interactions with drop-out status. These two covariates are SES and math_score_T1.
+
+b. I selected this model by only controlling for the most imbalanced variables (those with the greatest magnitudes of standardized mean differences, > 0.9, between students who dropped out and students who remained in school).
+
+c. We estimate the average treatment effect on the treated (ATT) of dropping out on mathematics scores as -0.464 (95% CI of [-0.525, -0.403]).
+
+Model 2:
+
+a. This linear regression model controls for ten covariates as well as their interactions with drop-out status. These ten covariates include the two from Model 1 (SES and math_score_T1) as well as repeated_grade, math_identity, math_efficacy, math_interest, engagement, belonging, expectations, and climate.
+
+b. I selected this model by only controlling for the imbalanced variables (those with notable magnitudes of standardized mean differences/differences in proportions, > 0.2, between students who dropped out and students who remained in school).
+
+c. We estimate the average treatment effect on the treated (ATT) of dropping out on mathematics scores as -0.333 (95% CI of [-0.395, -0.271]).
+
+Model 3:
+
+a. This linear regression model controls for ten covariates, their interactions with drop-out status, as well as their interactions among themselves. These ten covariates are the same as in Model 2 (SES, math_score_T1, repeated_grade, math_identity, math_efficacy, math_interest, engagement, belonging, expectations, and climate).
+
+b. I selected this model to investigate how controlling for the interactions between imbalanced variables (those with notable magnitudes of standardized mean differences/differences in proportions, > 0.2, between students who dropped out and students who remained in school) affects our estimate of the ATT.
+
+c. We estimate the average treatment effect on the treated (ATT) of dropping out on mathematics scores as -0.392 (95% CI of [-0.455, -0.329]).

@@ -1,0 +1,250 @@
+---
+title: 'Assignment 2: Instrumental Variables and Regression Discontinuities'
+subtitle: 'STAT 328'
+author: 'Brody Kendall'
+output: html_document
+---
+
+# Instrumental variables 
+
+In the first part of the assignment, you will analyze a simulated study that is inspired by the Early Head Start Research and Evaluation Study, 1996-2010. Early Head Start (EHS) services are federally funded child care programs for children under the age of 3, that are combined with additional social services (including home visits focused on preventive health care and case management to help families access other social programs). An overview of the real research project can be found here: http://www.icpsr.umich.edu/icpsrweb/ICPSR/studies/3804.
+
+The study was a large randomized trial conducted in 17 different sites across the country. Eligible families were randomized by site (i.e., block-randomized with sites as blocks) to either a) have access to EHS services, including center-based child care, home visits, and case management, or b) be ineligible for these services at least until their child reached age 3. Take-up of the EHS services was imperfect, in that not all eligible families actually made use of the main components of the program. Furthermore, a small percentage of ineligible families actually did receive one or more of the main program components, despite their random assignment.
+
+The study measured a very large number of outcomes related to parent behavior and knowledge, service usage, and child development. For present purposes, interest in the effects of the EHS on the mental and physical development of the focal children from participating families, as measured by the Bayley Mental Development Index 30 months after enrollment in the study.
+
+The simulated dataset (posted on Canvas) contains the following variables:
+
+- `id`: unique identifier for each family
+- `site`: unique identifier for each site
+- `age`: age of focal child (in months) at time of enrollment into the study
+- `male`: indicator variable equal to one if focal child is male
+- `race`: categorical variable reporting the race of the focal child
+- `income_pov_pct`: family income at time of enrollment into the study, measured as a percentage of the federal poverty line
+- `assignment`: indicator variable equal to one if family was randomized to have access to EHS services, equal to zero if they were not eligible
+- `home_visits`: indicator variable equal to one if family received any EHS home visits during the course of the study
+- `center_care`: indicator variable equal to one if child attended EHS center care for at least one week during the course of the study
+- `case_management`: indicator variable equal to one if the family received any EHS case management during the course of the study
+- `MDI`: Bayley mental development index, measured 30 months after enrollment. Note that this variable is standardized to have mean 0 and variance 1.
+
+## Intent-to-treat analysis.
+
+1a. Assess the balance between the treatment and control groups on the background characteristics of age, sex, race, and income. Report the mean differences between the treatment and control groups on each of these variables, after adjusting for between-site differences. Are any of the differences larger than would be expected by chance? 
+
+```{r, include = FALSE}
+library(cobalt)
+library(clubSandwich)
+library(AER)
+library(ri2)
+library(dplyr)
+library(rddensity)
+```
+
+```{r}
+EHSRES <- read.csv("EHSRES.csv", stringsAsFactors=FALSE)
+EHSRES$site <- factor(EHSRES$site)
+
+covs1 <- subset(EHSRES, select = c(age, male, race, income_pov_pct))
+
+bal.tab(assignment ~ covs1, subclass = "site", data = EHSRES, 
+        disp = c("means", "sds"),
+        stats = c("mean.diffs"),
+        thresholds = c(m=.1))
+
+```
+
+After adjusting for between-site differences, the mean differences between the control and treatment groups on each of these variables are as follows: age = -0.0088, sex = 0.0081, race_Black = 0.0057, race_Caucasian = -0.0077, race_Hispanic = -0.0127, race_Other = 0.0147, income = -0.0646. None of these differences are larger than would be expected by chance.
+
+
+1b. Estimate the average effect of being assigned to have access to EHS services on the focal child’s MDI (provide a point estimate, standard error, and 95% CI). Describe in words (and/or formulas) the model you use to do so, and note the method used for calculating the standard error. Be sure that your estimates account for the study design by controlling for between-site differences. 
+
+```{r}
+# design-based
+lm_fit <- lm(MDI ~ assignment + site, data = EHSRES)
+V_CR2 <- vcovCR(lm_fit, cluster = EHSRES$site, type = "CR2")
+coef_test(lm_fit, vcov =V_CR2, test = "Satterthwaite")["assignment",]
+
+conf_int(lm_fit, V_CR2)["assignment",]
+```
+
+I used a block-randomized design-based model which is very similar to a regression model except that there is no homoskedasiticy assumption. The standard error is calculated as $SE_d = \sqrt{\frac{s^2_0}{n_0} + \frac{s^2_1}{n_1}}$. An estimate for the average effect of being assigned to have access to EHS services on the focal child’s MDI is 0.0644 with a standard error of 0.034, leading to a 95% Confidence interval of (-0.00769, 0.137).
+
+
+## Complier average treatment effects analysis.
+
+Policy-makers are interested in understanding the effects of actually receiving EHS services, rather than merely the effects of being offered the services. Compliance with treatment assignment was imperfect, so the effects of interest are not the same as those estimated in part 1b. Because EHS involves several components, we must first determine how to operationally define “receipt of EHS services.” We will define receipt of program services as __*participation in any of the program components*__, which is similar to the definition used in the real EHSRES study.
+
+2a. Define a new variable called “services,” equal to one if the family received any home visits, participated in EHS center-based child care, or received ANY case management services over the course of the study, and equal to zero if the family did NOT receive any of these component services. Report the proportion of the treatment group and the proportion of the control group that received any EHS services. 
+
+```{r}
+EHSRES$services = ifelse((EHSRES$home_visits == 1) | (EHSRES$center_care == 1) | (EHSRES$case_management == 1),1,0)
+
+(ESHRES_gr = EHSRES %>%
+    group_by(assignment, services) %>%
+    summarise(count = n()) %>%
+    mutate(prop = count / sum(count)) %>%
+    filter(services == 1)
+)
+```
+
+About 0.081 of the control group and 0.831 of the treatment group received some EHS service.
+
+
+2b. Estimate the average difference in MDI between children whose families received EHS services and those whose families did not receive any services (provide a point estimate, standard error, and 95% CI). Again, be sure to control for between-site differences. 
+
+```{r}
+# design-based
+lm_fit <- lm(MDI ~ services + site, data = EHSRES)
+V_CR2 <- vcovCR(lm_fit, cluster = EHSRES$site, type = "CR2")
+coef_test(lm_fit, vcov =V_CR2, test = "Satterthwaite")["services",]
+
+conf_int(lm_fit, V_CR2)["services",]
+```
+
+An estimate for the average difference in MDI between children whose families received EHS services and those whose families did not receive any services is 0.296 with a standard error of 0.0307, leading to a 95% Confidence interval of (0.231, 0.362).
+
+
+2c. Is your answer from 2b a credible estimate of the average effect of receiving EHS services? Explain why or why not. (1 pt)
+
+No. The result from 2b does not account for the fact that the children whose families did not comply with the treatment assignment may be systematically different enough to affect the estimate of the true average effect in either direction.
+
+
+
+2d. Estimate the effect of receiving EHS services on the focal child’s MDI using two-stage least squares, using treatment assignment as an instrument for receipt of any EHS services (provide a point estimate, standard error, and 95% CI). Be sure to control for between-site differences. Describe in words (and/or formulas) the model you use to do so, and note the method used for calculating the standard error. Be sure to note your assumption about whether compliance rates are constant or vary by site. 
+
+```{r, message=FALSE}
+# Constant case
+IV_constant <- ivreg(MDI ~ site + services | site + assignment, data = EHSRES)
+V_CR2 <- vcovCR(IV_constant, type = "CR2", cluster = EHSRES$site)
+coef_test(IV_constant, vcov = V_CR2, test = "Satterthwaite")["services",]
+
+conf_int(IV_constant, V_CR2)["services",]
+```
+
+An estimate for the effect of receiving EHS services on the focal child's MDI using two-stage least squares and using treatment assignment as an instrument for receipt of any EHS services is 0.0858 with a standard error of 0.0428, leading to a 95% Confidence interval of (-0.00505, 0.177). Here, we make the assumption that the compliance rates are constant by site. The model I used is a block-randomized two-stage least squares design. The first stage is a least-squares regression of the receipt on the assignment (accounting for the sites). The second stage is a least-squares regression of the outcome on the fitted receipts (from the first stage) for the given assignments (again, accounting for the sites). In calculating the standard error of the estimate, the program must take into account both stages - it is a combination of the variation in the fitted receipts and the variance of $\beta_1$ in the second stage.
+
+
+2e. Under what assumptions is the answer from 2d a credible estimate of the average effect of receiving EHS services for some sub-group of participants? To what sub-group of participants does the effect apply? 
+
+First, exclusion restriction. This means that treatment assignment can only affect the outcome through the treatment receipt. In other words, the assignment can't affect the outcome except through its effect on the receipt. Second, monotonicity. This means that there are no participants in the experiment who don't receive the treatment but were assigned to. Third, instrument effectiveness. This means that we expect a greater proportion of participants to receive the treatment when they are assigned to (which is clearly satisfied). Fourth, instrument exogeneity (the instrument is randomly assigned). This effect (known as the complier average treatment effect) only applies to compliers. That is, the subgroup of participants who were assigned treatment and received treatment, or were assigned no treatment and did not received treatment. In the context of this experiment, this means that the effect only applies to those who used the EHS services when they were made available to them and those who did not use the services when they were not made available.
+
+
+2f. Consider how your answer to 2e might change if being offered access to EHS services actually also entailed having access to additional services, such as free legal counseling and free health services for children and parents. Would any of the assumptions then be less plausible? 
+
+The exclusion restriction assumption would not be as plausible as before. This is because assignment could have potential to affect the outcome in some way outside of the treatment receipt (use of the defined EHS services).
+
+
+# Regression discontinuity
+
+In the second part of the assignment, you will analyze a simulated study that is inspired by a study of the effects of remedial education (summer school) on the achievement levels of elementary school students in Chicago Public Schools (Jacob & Lefgren, 2004). In 1996, Chicago Public Schools implemented a policy requiring that students grades 3, 6, and 8 meet certain performance standards on the Iowa Test of Basic Skills in order to advance to the next grade. Students who did not attain certain minimum scores on the math and reading portions of the exam were required to attend 6 weeks of summer school for further instruction. Summer school attendees were then re-tested at the end of the program, and students that still did not attain the minimum scores were retained in grade (i.e., third graders that did not pass had to repeat third grade). For purposes of this exercise, we will focus only on first-time third graders (excluding those who had already been retained) who passed the math portion of the exam; the goal is to estimate the causal effect of participating in summer school on reading performance the following year (when some of the students had advanced to fourth grade, while others were retained in third grade).
+
+The simulated dataset (posted on Canvas) contains the following variables:
+
+- `id`: unique identifier for each family
+- `school`: unique identifier for the student’s school
+- `male`: indicator variable equal to one if the student is male
+- `FRL`: indicator variable equal to one if the student is eligible for the free/reduced-price lunch program
+- `ITBS_read_96`: student’s score on the reading portion of the Iowa Test of Basic Skills in 3rd grade in 1996. Students scoring less than -1 were assigned to remedial summer school.
+- `attend_SS`: indicator variable equal to one if the student attended summer school
+- `ITBS_read_97`: student’s score on the reading portion of the Iowa Test of Basic Skills in 1997
+
+The following questions ask you to evaluate whether the assumptions required for RD are reasonable, and then to estimate the effect of attending summer school on following-year reading performance for students near the margin of passing. 
+
+## Check assumptions
+
+3a. Check the continuity of the forcing variable. Create a histogram of ITBS_read_96 in order to evaluate whether its density is continuous.at -1 (the cut-off for being assigned to summer school). Is there any evidence of tampering with the forcing variable? 
+```{r}
+library(ggplot2)
+library(rdd)
+library(rdrobust)
+
+#read in data 
+summer_school <- read.csv(file = "Summer_School.csv", stringsAsFactors = FALSE)
+summer_school$school = as.factor(summer_school$school)
+
+hist(summer_school$ITBS_read_96, main = "Histogram of 1996 Reading Scores", xlab = "1996 Reading Scores")
+
+rdd = rddensity(summer_school$ITBS_read_96, c=-1)
+rdplotdensity(rdd, summer_school$ITBS_read_96)
+
+
+                         
+```
+
+From these graphs there is little evidence of tampering with the forcing variable - the density seems to be continuous at -1.
+
+
+3b. Check balance on the covariates male and FRL in the neighborhood of the cut-off using linear regressions of the covariate on the forcing variable, treatment assignment, and their interaction. Report the difference in the proportion of males and the difference in the proportion of students receiving FRL at the cut-off. 
+
+```{r}
+lm_fit_m = lm(male~ITBS_read_96*attend_SS, data=summer_school)
+predict(lm_fit_m, data.frame(ITBS_read_96 = -1, attend_SS = 1)) - predict(lm_fit_m, data.frame(ITBS_read_96 = -1, attend_SS = 0))
+
+lm_fit_f = lm(FRL~ITBS_read_96*attend_SS, data=summer_school)
+predict(lm_fit_f, data.frame(ITBS_read_96 = -1, attend_SS = 1)) - predict(lm_fit_f, data.frame(ITBS_read_96 = -1, attend_SS = 0))
+```
+
+The difference in proportion of males at the cutoff is about -0.000926 and the difference in proportion of students receiving FRL at the cutoff is about -0.00222.
+
+3c. Does being assigned to summer school induce students to attend? In other words, is there a discontinuity at the cut-off in the probability of attending summer school? Provide a graphic and/or report a regression analysis in support of your answer. 
+
+```{r}
+#Used https://danilolimoeiro.com/2017/04/02/presenting-results-of-a-regression-discontinuity-design/ for inspiration
+ggplot(summer_school, aes(ITBS_read_96, attend_SS)) +
+  geom_point() + stat_smooth(size = 2) +
+  geom_vline(xintercept=-1, linetype="longdash") +
+  xlab("1996 Reading Score") +
+  ylab("Attend Summer School") +
+  scale_colour_discrete(name="Experimental\nCondition",
+                          breaks=c("0", "1"), labels=c("Control", "Treatment"))
+    
+```
+
+Based on the graph, it is very clear that being assigned to summer school induces a student to attend summer school.
+
+
+## Treatment effects
+
+_For the following questions, you can ignore the fact that students are nested within schools, and treat each observation as independent._
+
+4a. Estimate the effect of __*being assigned*__ to summer school on following-year reading scores for students close to the cut-off. Report a point estimate, standard error, and 95% CI. Describe your estimation strategy in sufficient detail so that it could be replicated.
+
+```{r}
+ITT_r <- rdrobust(y = summer_school$ITBS_read_97, x = summer_school$ITBS_read_96, vce = "hc2", c=-1)
+summary(ITT_r)
+```
+
+We can estimate the effect of being assigned to summer school on the following year reading scores for students close to the cutoff as -0.091 with a standard error of 0.062, leading to a 95% confidence interval of (-0.212, 0.030). The estimation strategy implements local polynomial Regression Discontinuity (RD) using the default settings on in the rdrobust R package (triangular kernel, bandwidth computed by rdbwselect, etc.).
+
+4b. Estimate the effect of __*attending*__ summer school on following-year reading scores for students close to the cut-off. Report a point estimate, standard error, and 95% CI. Describe your estimation strategy in sufficient detail so that it could be replicated. 
+
+```{r}
+ITT_r <- rdrobust(y = summer_school$ITBS_read_97, x = summer_school$ITBS_read_96, vce = "hc2", c=-1, fuzzy = summer_school$attend_SS)
+summary(ITT_r)
+```
+
+We can estimate the effect of attending summer school on the following year reading scores for students close to the cutoff as 0.124 with a standard error of 0.073, leading to a 95% confidence interval of (-0.019, 0.267). This estimation strategy is very similar to that in part (a) except that it identifies the treatment receipt as whether the student attended summer school or not and uses fuzzy RD rather than sharp RD.
+
+
+4c. Examine the sensitivity of the estimates from 4a and 4b to variation in the functional form of the regression model and/or to the width of the bandwidth/window used for estimation. Provide a table that summarizes estimates based on alternative models, and explain your assessment of whether the results are sensitive to the choice of model. 
+
+```{r}
+est_summ_a = data.frame(h=as.numeric(), coef=as.numeric(), se=as.numeric(), ci_lower=as.numeric(), ci_upper=as.numeric())
+est_summ_b = data.frame(h=as.numeric(), coef=as.numeric(), se=as.numeric(), ci_lower=as.numeric(), ci_upper=as.numeric())
+
+for (i in 1:5) {
+    h = i*.2
+    ITT_r <- rdrobust(y = summer_school$ITBS_read_97, x = summer_school$ITBS_read_96, vce = "hc2", c=-1, h = h)
+    est_summ_a[i,] = round(c(h, ITT_r$coef[1], ITT_r$se[1], ITT_r$ci[1,]), 3)
+
+    ITT_r <- rdrobust(y = summer_school$ITBS_read_97, x = summer_school$ITBS_read_96, vce = "hc2", c=-1, 
+                      fuzzy = summer_school$attend_SS, h = h)
+    est_summ_b[i,] = round(c(h, ITT_r$coef[1], ITT_r$se[1], ITT_r$ci[1,]), 3)
+}
+
+est_summ_a
+est_summ_b
+
+```
+
+Based on the tables, we can see that the results are sensitive to the choice of the model. For both estimation strategies, we see the coefficient, the standard error, and the confidence interval bounds changing as the bandwidth changes. The standard error decreases as the bandwidth increases, leading to tighter confidence intervals. In both cases, only when h=1 does the 95% confidence interval not include 0. However, the coefficient estimate does not have a linear relationship with the bandwidth - it initially decreases with increasing bandwidth (between h=.2 and .6) but then increases between h=.6 and 1. Clearly, the choice of the model affects the estimate.

@@ -1,0 +1,411 @@
+---
+title: "HW 4: Propensity score analysis"
+author: 'Brody Kendall'
+output: 
+  html_document:
+    code_folding: hide
+    toc: true
+    toc_float: true
+    toc_depth: 2
+---
+
+In this assignment, you are asked to continue analysis of the [High School Longitudinal Study of 2009](https://nces.ed.gov/surveys/hsls09/index.asp) to estimate the effect of dropping out of high school on __*students' mathematics knowledge*__. In Assignment 3, your main tool was regression analysis. In this assignment, you will use an expanded toolkit of methods that involve propensity scores. 
+
+# Data
+
+The data for this assignment is identical to that from assignment 3. All of the covariates were measured on base-year surveys in 2009, prior to student drop-out. The included variables are as follows:
+
+- __Categorical covariates__
+    - `sex`: student sex (self-reported). 2 categories.
+    - `race`: student race/ethnicity (self-reported) 8 categories.
+    - `language`: student's first language (English, non-English only, Multi-lingual).
+    - `repeated_grade`: indicator for whether student has repeated grade 9 (parent-reported).
+    - `IEP`: indicator for whether student has an individualized-education plan.
+    - `locale`: school locale (urbanicity). 4 categories.
+    - `region`: Major census region. 4 categories.
+- __Continuous covariates__
+    - `SES`: composite measure of family socio-economic status
+    - `math_identity`: scale measure of student's identity as a "math person"
+    - `math_utility`: scale measure of student's perception that math is useful
+    - `math_efficacy`: scale measure of student's math self-efficacy
+    - `math_interest`: scale measure of student's interest in their current mathematics course.
+    - `engagement`: scale measure of student's engagement in school
+    - `belonging`: scale measure of student's sense of school belonging
+    - `expectations`: student's expectations for further schooling
+    - `climate`: principal-reported scale measure of school climate.
+    - `math_score_T1`: student's math knowledge as of 2009
+- __Treatment__
+    - `drop_status`: indicator for whether student dropped out as of 2012.
+- __Outcomes__
+    - `math_score_T2`: measure of math knowledge as of 2012
+    - `working_T3`: indicator for whether the student is working as of 2013.
+
+# Questions
+
+
+Instructions:
+
+- For each of the following questions, write your response in complete sentences unless otherwise specified. (Do NOT provide raw computer output without also writing your interpretation of that output.) 
+- Report both point estimates and 95% confidence intervals whenever the question asks you to estimate an effect. 
+- For purposes of the assignment only, you may treat the data as coming from a *simple random sample* of the population of high school students. (If you want to analyze these data for real, you should apply for a restricted-use license in order to access information on the structure of the sampling design.)
+- Use heteroskedasticity-robust standard errors (HC2-type) throughout.
+
+## 1. Propensity score model 
+
+Fit a propensity score model using a logistic regression of D on the main effects of the seven categorical covariates and ten continuous covariates. Calculate the logit of the estimate propensity scores for each observation.
+
+```{r setup, warning = FALSE, message = FALSE}
+library(ggplot2)
+library(sandwich)
+library(lmtest)
+library(cobalt)
+library(MatchIt)
+library(WeightIt)
+library(clubSandwich)
+library(dplyr)
+library(twang)
+load("HSLS09.Rdata")
+```
+
+```{r, warning = FALSE, message = FALSE}
+logit <- glm(drop_status ~ . - math_score_T2 - working_T3, data = HSLS09_complete, family = "binomial")
+logit_p = logit$fitted.values
+head(logit_p)
+```
+
+The logit of the estimated propensity scores for each observation are stored in the vector "logit_p" with the first six displayed above.
+
+
+  a. Report the mean difference between treated and untreated units in the logit of the estimated propensity. 
+  
+```{r}
+bal.tab(drop_status ~ logit_p, data = HSLS09_complete, 
+        disp = c("means"),
+        stats = c("mean.diffs"),
+        thresholds = c(m=.1),
+        continuous = "raw")
+```
+
+The mean difference between treated and untreated units in the logit of the estimated propensity is about 0.1209.
+
+
+  b. Create a graph depicting the distribution of estimated propensity score logits among students who drop out and students who stay in school. 
+
+```{r, fig.width = 5, fig.height = 3}
+bal.plot(drop_status ~ logit_p, data = HSLS09_complete, continuous = "raw")
+```
+
+The distributional balance of the two groups can be seen in the plot above with estimated propensity score logits among students who drop out in blue and among students who stay in school in red.
+
+
+  c. Compare the range of logit-propensities among students who drop out to that among students who stay in high school. 
+  
+```{r}
+range(logit_p[which(HSLS09_complete$drop_status == 1)])
+range(logit_p[which(HSLS09_complete$drop_status == 0)])
+```
+
+The range of logit-propensities among students who drop out (.0018 to .7047) is relatively similar to that among students who stay in high school (.00009 to .7391).
+
+
+  d. Explain the implications of your answers to (b) and (c) for the feasibility of using propensity score methods to estimate the effects of dropping out. 
+  
+Although the ranges are similar, it is easy to see from the plot that the control group has a narrow distribution of logit propensity score estimates and little overlap with the treatment group. Since the common support (with a meaningful number of observations) between the distributions is not very large, using propensity score methods to estimate the effects of dropping out may be difficult.
+
+
+## 2.	1-1 nearest neighbor matching on the propensity score
+
+Choose a matched sample of untreated units using 1-1 nearest neighbor matching without replacement, based on the logit of the propensity score.
+```{r, warning = FALSE, message = FALSE}
+m.match.NN <- matchit(drop_status ~ . - math_score_T2 - working_T3, data = HSLS09_complete,
+                      distance = "glm", link = "logit", #linear.logit gives logits
+                      estimand = "ATT", #ATE #ATC
+                      method = "nearest", #optimal #full #genetic
+                      replace = FALSE, #TRUE
+                      m.order = "largest", #data, smallest, largest, random
+                      #caliper = 0.10, #when set, removes T units, too, if outside c
+                      std.caliper = TRUE, #caliper on raw or STD data
+                      ratio = 1, #k:1, specify k
+                      verbose = TRUE)
+
+```
+
+  a. Report the number of treated and untreated units in the matched sample.
+  
+```{r}
+m.match.NN$nn
+```
+  
+There are 595 treated units and 595 untreated units in the matched sample.
+
+
+  b. For each covariate, report the mean differences between treated and untreated units __*in the matched sample*__. Do the same for the logit of the estimated propensity scores. 
+  
+```{r}
+data.match.NN <- match.data(m.match.NN)
+covs1 <- subset(data.match.NN, select = c(-drop_status, -math_score_T2, -working_T3, -subclass))
+bal.tab(drop_status ~ covs1, data = data.match.NN,
+        disp = c("means", "sds"), #saves and prints means, sds for both
+        un = TRUE, #includes unadjusted as well
+        stats = c("mean.diffs", "variance.ratios"), #stats to include
+        thresholds = c(m=.1, v = 2)) #thresholds for 'balance'
+```
+  
+The mean differences between treated and untreated units for each covariate in the matched sample can be seen in the column labeled Diff.Un in the table above. The mean difference between treated and untreated units for the logit of the estimated propensity score is about 0.0028.
+
+
+  c. Estimated the ATT based on the __*mean differences*__ in the outcome between treated and untreated units in the matched sample. 
+
+```{r}
+fit.match <- lm(math_score_T2~drop_status, data = data.match.NN)
+V_CR2 <- vcovCR(fit.match, type = "CR2", cluster = 1:nrow(data.match.NN))
+coef_test(fit.match, vcov = V_CR2, test = "Satterthwaite")["drop_status",]
+confint(fit.match, vcov=V_CR2, type = "HC2")["drop_status",]
+```
+
+We estimate the ATT based on the mean differences in the outcome between treated and untreated units in the matched sample as -0.427 (95% CI of [-0.5307990, -0.3230258]).
+
+
+  d. Estimate the ATT using ANCOVA within the matched sample. The ANCOVA should include the main effects of each of the covariates (but no interactions among covariates or between covariates and the treatment). 
+
+```{r}
+fit.match <- lm(math_score_T2~.-working_T3 -subclass - distance, data = data.match.NN)
+V_CR2 <- vcovCR(fit.match, type = "CR2", cluster = 1:nrow(data.match.NN))
+coef_test(fit.match, vcov = V_CR2, test = "Satterthwaite")["drop_status",]
+confint(fit.match, vcov=V_CR2, type = "HC2")["drop_status",]
+```
+
+We estimate the ATT using ANCOVA withing the matched sample as -0.423 (95% CI of [-0.5027931, -0.3425177]).
+
+
+## 3. Refined matching
+
+Implement some other method of matching treated and untreated units, with the goal of obtaining better balance than using 1-1 nearest neighbor matching.
+
+  a. Describe the method that you use in sufficient detail so that someone (...your professor, say...) could replicate it exactly. (Note that this must be a written description. Showing code is not sufficient.)
+  
+```{r}
+m.match.NN <- matchit(drop_status ~ . - math_score_T2 - working_T3, data = HSLS09_complete,
+                      distance = "glm", link = "logit", #linear.logit gives logits
+                      estimand = "ATT", #ATE #ATC
+                      method = "optimal", #nearest #full #genetic
+                      #caliper = 0.10, #when set, removes T units, too, if outside c
+                      std.caliper = TRUE, #caliper on raw or STD data
+                      ratio = 1, #k:1, specify k
+                      verbose = TRUE)
+```
+
+I implemented optimal matching for the treated and untreated units based on the logit of the propensity score. Optimal matching minimizes the average absolute distance across all the matched pairs, more of a holistic approach compared to the greedy nearest-neighbor algorithm.
+  
+  
+  b. For each covariate, report the mean differences between treated and untreated units in the (new and improved) matched sample. Do the same for the logit of the estimated propensity scores.
+```{r}
+data.match.NN <- match.data(m.match.NN)
+covs1 <- subset(data.match.NN, select = c(-drop_status, -math_score_T2, -working_T3, -subclass))
+bal.tab(drop_status ~ covs1, data = data.match.NN,
+        disp = c("means", "sds"), #saves and prints means, sds for both
+        un = TRUE, #includes unadjusted as well
+        stats = c("mean.diffs", "variance.ratios"), #stats to include
+        thresholds = c(m=.1, v = 2)) #thresholds for 'balance'
+```
+
+The mean differences between treated and untreated units for each covariate in the matched sample can be seen in the column labeled Diff.Un in the table above. The mean difference between treated and untreated units for the logit of the estimated propensity score is about 0.0004.  
+  
+  c. Compare the covariate balance from this matched sample to your results from Question 3b.
+
+For both matching methods, all the covariates are considered balanced (standardized mean differences less than .1). However, they seem to be slightly more balanced for the optimal matching method. The variable with the greatest mean difference from Question 3b was math_utility with a difference of -0.0552 while the variable with the greatest mean difference from the optimal matching method is math_interest with a difference of -0.0415.
+  
+  d. Estimate the ATT based on this matched sample. Describe your approach in sufficient detail so that someone could replicated it exactly. 
+```{r}
+fit.match <- lm(math_score_T2~.-working_T3 -subclass - distance - weights, data = data.match.NN)
+V_CR2 <- vcovCR(fit.match, type = "CR2", cluster = 1:nrow(data.match.NN))
+coef_test(fit.match, vcov = V_CR2, test = "Satterthwaite")["drop_status",]
+confint(fit.match, vcov=V_CR2, type = "HC2")["drop_status",]
+```
+
+I estimated the ATT using ANCOVA within the matched sample. The ANCOVA included the main effects of each of the covariates but no interactions among covariates or between covariates and the treatment. This estimate is -0.375 (95% CI of [-0.4548094, -0.2950995]).
+  
+  
+## 4.	Propensity score sub-classification
+
+Divide the sample into 5, equal sized strata for estimation of the ATT. Discard any untreated observations that do not fall within the range of the logit propensity among treated units.
+
+```{r}
+m.sub <- matchit(drop_status ~ . - math_score_T2 - working_T3,
+                 data = HSLS09_complete, distance = "glm", link = "logit", #use linear.logit for logits
+                 method = "subclass",
+                 estimand = "ATT",#ATE #ATC
+                 subclass = 5, #automatically makes equal sized
+                 discard = "control", #none
+                 reestimate = TRUE) #reests after discard
+```
+
+
+  a. For each covariate, calculate the mean differences between treated and untreated units *across* subclasses and *within* each sub-class. Do the same for the logit of the estimated propensity scores. For each covariate, report the average of the mean differences. 
+  
+```{r}
+summary(m.sub, standardize = TRUE)
+summary(m.sub, standardize = TRUE, subclass = TRUE)
+```
+
+For each covariate, the mean differences between treated and untreated units across subclasses are listed in the table labeled "Summary of Balance Across Subclasses" under the column labeled "Std. Mean Diff." The mean differences between treated and untreated units within each sub-class are listed in the tables labeled "Subclass x" under the column labeled "Std. Mean Diff.". Across all subclasses, the mean difference between the logit of the estimated propensity scores is 0.0539. For subclasses 1-5, respectively, the mean differences between the logit of the estimated propensity scores are 0.0315, 0.0182, 0.0728, 0.0185, and 0.1285.
+
+
+  b. Report the number of treated and untreated units in each of the five sub-classes, in order of lowest to highest propensity.
+  
+```{r}
+summary(m.sub, standardize = TRUE)$qn
+```
+
+The number of treated and untreated units in each of the five sub-classes can be seen in the table above (e.g. there are 14157 untreated units and 119 treated units in subclass 1). The subclasses are automatically ordered with subclass 1 having the lowest propensity and subclass 5 having the highest propensity.
+
+
+  c. Estimate the ATT based on the __*mean differences*__ in the outcome within each subclass. 
+  
+```{r}
+data.sub <- match.data(m.sub, group = "all", distance = "ps", subclass= "subclass")
+fit.sub2 <- lm(math_score_T2~subclass + subclass:drop_status - 1, data = data.sub)
+V_CR2 <- vcovCR(fit.sub2, type = "CR2", cluster = 1:nrow(data.sub))
+coeftest(fit.sub2, vcov=V_CR2, type = "HC2")
+confint(fit.sub2, vcov=V_CR2, type = "HC2")
+```
+
+The ATT estimates within subclasses 1-5 are, respectively, -1.014988, -0.436522, -0.373494, -0.253671, and -0.263183 with 95% CIs of [-1.18949093, -0.84048426], [-0.61405843, -0.25898542], [-0.55745645, -0.18953191], [-0.44751760, -0.05982465], and [-0.47646487, -0.04990128].
+
+
+  d. Estimate the ATT using ANCOVA within each of the five sub-classes. For each sub-class, the ANCOVA should include the main effects of each of the covariates (but no interactions among covariates or between covariates and the treatment). 
+  
+```{r}
+fit.sub2 <- lm(math_score_T2~.-working_T3-ps + subclass + subclass:drop_status, data = data.sub)
+V_CR2 <- vcovCR(fit.sub2, type = "CR2", cluster = 1:nrow(data.sub))
+coeftest(fit.sub2, vcov=V_CR2, type = "HC2")
+confint(fit.sub2, vcov=V_CR2, type = "HC2")
+```
+  
+The ATT estimates using ANCOVA within each of the five sub-classes can be seen under the column labeled "Estimate" with 95% CIs defined by the lower bound in the column labeled 2.5% and the upper bound in the column labeled 97.5%.
+
+
+## 5.	Inverse propensity weighting
+
+Calculate weights for treated and untreated units for use in estimating the ATT. 
+
+```{r}
+m.ps <- matchit(drop_status ~ . - math_score_T2 - working_T3, 
+                data = HSLS09_complete, method = NULL)
+data_ps <- match.data(m.ps, distance = "ps")
+data_ps$wts <- get_w_from_ps(data_ps$ps, #ps estimates
+                             treat = data_ps$drop_status,#vector of treatment assignment
+                             estimand = "ATT", #ATE, ATC
+                             focal = "1",
+                             treated = 1) #what value of 'treat' is the trt group
+```
+
+  a. Report the five highest weights among the untreated units.
+  
+```{r}
+tail(sort(filter(data_ps, drop_status == 0)$wts),5)
+```
+  
+The five highest weights among the untreated units are 2.086687, 2.476469, 2.531897, 2.631652, and 2.832975.
+
+
+  b. For each covariate, report the __*weighted mean difference*__ between treated and untreated units, using the weights from (a). Do the same for the stimated propensity scores. 
+  
+```{r}
+covs1 <- subset(data_ps, select = c(-drop_status, -math_score_T2, -working_T3, -weights, -wts))
+bal.tab(drop_status ~ covs1, weights = data_ps$wts, data = data_ps,
+        disp = c("means", "sds"), #saves and prints means, sds for both
+        stats = c("mean.diffs", "variance.ratios"), #stats to include
+        thresholds = c(m=.1, v = 2)) #thresholds for 'balance'
+
+```
+  
+For each covariate, the weighted mean differences between treated and untreated units are listed under the column labeled "Diff.Adj". The weighted mean difference for the estimated propensity scores is -0.1527.
+
+
+  c. Using weights, estimate the ATT based on the outcomes between treated and untreated units. 
+  
+```{r}
+fit.wts <- lm(math_score_T2~drop_status, data = data_ps, weights = wts)
+V_CR2 <- vcovCR(fit.wts, type = "CR2", cluster = 1:nrow(data_ps))
+coeftest(fit.wts, vcov = V_CR2, test = "Satterthwaite")["drop_status",]
+confint(fit.wts, vcov=V_CR2, type = "HC2")["drop_status",]
+```
+
+We estimate the ATT as -0.3785 (95% CI of [-0.4031823, -0.3538978]).
+
+
+  d. Using weights, estimate the ATT based a model adjusting for covariates (but no interactions among covariates or between covariates and the treatment).
+  
+```{r}
+fit.wts <- lm(math_score_T2~.-working_T3 - ps - weights - wts, data = data_ps, weights = wts)
+V_CR2 <- vcovCR(fit.wts, type = "CR2", cluster = 1:nrow(data_ps))
+coeftest(fit.wts, vcov = V_CR2, test = "Satterthwaite")["drop_status",]
+confint(fit.wts, vcov=V_CR2, type = "HC2")["drop_status",]
+```
+  
+We estimate the ATT as -0.4014 (95% CI of [-0.4201267, -0.3826166]).
+
+
+## 6.	Refined propensity score model
+
+Re-fit the propensity score model with the goal of obtaining better balance than in Question 5. You could do this by adding interactions among the covariates, while still estimating a logistic regression model, or by using some other technique for estimating propensity scores. Some (but not all!) possible alternative methods: [covariate-balancing propensity scores](https://CRAN.R-project.org/package=CBPS), [generalized boosted regression trees](https://CRAN.R-project.org/package=twang), or [entropy-balancing propensity scores](https://cran.r-project.org/package=ebal).
+
+  a. Describe the method that you use in sufficient detail so that someone could replicate it exactly.
+```{r message=FALSE}
+set.seed(1)
+m.ps <- ps(drop_status ~ . - math_score_T2 - working_T3, 
+                 data = HSLS09_complete,
+                 n.trees=1000,
+                 interaction.depth=2,
+                 shrinkage=0.01, 
+                 perm.test.iters=0,
+                 stop.method=c("es.mean","ks.max"),
+                 estimand = "ATT",
+                 verbose=FALSE)
+HSLS09_complete$w <- get.weights(m.ps, stop.method="es.mean")
+```
+  
+
+I used generalized boosted regression trees to estimate the propensity scores. I did so based on all 17 covariates with 1000 trees, an interaction depth of 2, and shrinkage of 0.01. I only used 1000 trees due my very old and weak computer, so these propensity scores estimates would likely be even more accurate if allowed a larger number of iterations.
+
+
+  b. For each covariate, report the __*weighted mean difference*__ between treated and untreated units, using the weights from (a). Do the same for the estimated propensity scores.
+```{r}
+covs1 <- subset(HSLS09_complete, select = c(-drop_status, -math_score_T2, -working_T3))
+bal.tab(drop_status ~ covs1, weights = HSLS09_complete$w, data = HSLS09_complete,
+        disp = c("means", "sds"), #saves and prints means, sds for both
+        stats = c("mean.diffs", "variance.ratios"), #stats to include
+        thresholds = c(m=.1, v = 2)) #thresholds for 'balance'
+```
+
+For each covariate, the weighted mean differences between treated and untreated units are listed under the column labeled "Diff.Adj". The weighted mean difference for the estimated propensity scores is 4.4470. This is much larger than our previous models, but this is because we do not discard any data in this approach.
+  
+  
+  c. Compare the covariate balance from this matched sample to your results from Question 5b.
+
+For the method in Question 5b, all the covariates are considered balanced (standardized mean differences less than .1) while all but one covariate is balanced for this approach. Generally, the covariates in Question 5b seem to be  more balanced. The variable with the greatest mean difference from Question 3b was engagement with a difference of 0.0470 while the variable with the greatest mean difference from the optimal matching method is SES with a difference of -0.1062. Part of this discrepancy in balance is likely due to the reduced number of iterations for the GBM algorithm.
+
+  
+  d. Estimate the ATT using weights from the refined propensity score model. Describe your approach in sufficient detail so that someone could replicated it exactly.
+```{r}
+fit.wts <- lm(math_score_T2~drop_status, data = HSLS09_complete, weights = w)
+V_CR2 <- vcovCR(fit.wts, type = "CR2", cluster = 1:nrow(HSLS09_complete))
+coeftest(fit.wts, vcov = V_CR2, test = "Satterthwaite")["drop_status",]
+confint(fit.wts, vcov=V_CR2, type = "HC2")["drop_status",]
+```
+  
+We estimate the ATT using ANCOVA withing the matched sample as -0.467 (95% CI of [-0.4925398, -0.4418711]).
+  
+
+## 7.	Discussion 
+
+Compare the results of your analyses from Questions 2-6. 
+
+  a. Which of the methods (2-6) provides the best balance on the covariates? Explain your reasoning. 
+
+The method from Question 5b provides the best balance on the covariates. It has the smallest maximum mean difference among covariates and generally has smaller mean differences between the treatment and control groups.
+  
+  b. If you had to report just a single estimate of the ATT, which balancing method and estimation method would you use? Explain your reasoning.
+
+I would use the estimate in Question 5c. This is the estimate that comes from the most well-balanced model (inverse propensity weighting). Also, I would elect not to control for the covariates as the weights are already calculated from the covariates and we want to avoid overestimating the treatment effect.
